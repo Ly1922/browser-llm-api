@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the browser-llm-api watchdog every 10 minutes
+
+[Timer]
+# 2 min after boot, then every 10. The integrity check is what makes this worth
+# running so often: it catches a deleted or broken venv while the service is
+# still happily serving, instead of at the next restart days later.
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

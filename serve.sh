@@ -17,8 +17,15 @@ export GEMINI_IMAGE_DIR="${GEMINI_IMAGE_DIR:-$HOME/Pictures/browser-llm}"
 export GEMINI_PUBLIC_URL="${GEMINI_PUBLIC_URL:-http://localhost:8081}"
 export DEFAULT_PROVIDER="${DEFAULT_PROVIDER:-gemini-browser}"
 
-# Prefer the project venv, else system python3.
-if [ -x venv/bin/python ]; then PY=venv/bin/python; else PY=python3; fi
+# The venv is the ONLY interpreter that can run this. Never fall back to the
+# system python3: it is PEP-668 and can never hold nodriver, so falling back
+# only ever produced a crash loop with a misleading ModuleNotFoundError
+# (2026-09-07, 241 restarts). ensure-venv.sh rebuilds a missing one instead.
+if ! ./ensure-venv.sh >&2; then
+  echo "[serve] cannot build a usable venv — refusing to start. See the messages above." >&2
+  exit 1
+fi
+PY=venv/bin/python
 
 # Clear stale singleton locks left by a previous hard crash (ignore if absent).
 rm -f gemini_profile/Singleton* chatgpt_profile/Singleton* 2>/dev/null || true

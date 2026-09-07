@@ -204,6 +204,23 @@ systemctl --user restart browser-llm-api
 journalctl --user -u browser-llm-api -f  # live logs (server.log stays empty; the journal is the log)
 ```
 
+### Watchdog
+
+`install-service.sh` also installs `browser-llm-health.timer`, which runs `healthcheck.sh` every 10 minutes. It checks three things that fail independently:
+
+- **Integrity** — can `venv/bin/python` still import the dependencies? This is the check that earns the other two. A deleted or broken venv does *not* take the API down: the running process already holds its imports and keeps serving normally, so the damage stays invisible until the next restart. In the incident this was written for, that gap was ten days, and the restart turned it into a crash loop. The watchdog rebuilds the venv while the service is still healthy.
+- **Liveness** — is `/api/status` answering? If not it restarts the unit once, and alerts only if that fails.
+- **Auth** — once a day, one short completion per provider. An expired login is this project's most common failure, and the server stays perfectly healthy while returning nothing, so nothing cheaper can detect it.
+
+It is silent when healthy. Run it by hand with `./healthcheck.sh --deep`; its log is `~/.local/state/browser-llm-api/health.log`.
+
+Alerts are off by default (it just logs). Point them somewhere with `BLM_ALERT_DIR` (writes a Markdown file into a queue folder for a chat bridge to pick up) or `BLM_ALERT_CMD` (runs a command per alert with `BLM_ALERT_SEVERITY` / `BLM_ALERT_TITLE` / `BLM_ALERT_BODY` / `BLM_ALERT_KIND` in the environment — use it for a webhook, ntfy, or mail). `notify-send` is used too when it is installed. Each alert kind has a cooldown, so a long outage does not become a stream of messages.
+
+```bash
+systemctl --user list-timers browser-llm-health.timer
+./healthcheck.sh --deep       # run it now, including the model ping
+```
+
 ## Authentication
 
 **Each provider needs its own login**, stored in its own profile (`gemini_profile/` / `chatgpt_profile/`). When answers come back empty or you see a sign-in / "verify you're human" wall, that provider's session has expired.
@@ -352,6 +369,8 @@ than conversation; pass `keep_chat: true` when the person asked to see the threa
 | `MAX_ATTACHMENT_MB` | `20` | per-attachment size ceiling |
 | `ALLOW_REMOTE_FILE_PATHS` | *(unset)* | let non-localhost (and cross-origin) clients attach **server-side file paths** (off by default) |
 | `BROWSER_LLM_EPHEMERAL` | `0` | delete the conversation after every chat completion that doesn't say otherwise (see [Ephemeral requests](#ephemeral-requests)) |
+| `BLM_ALERT_DIR` | *(unset)* | watchdog only: write each alert as a Markdown file into this directory, for a chat/notification bridge to pick up (see [Watchdog](#watchdog)) |
+| `BLM_ALERT_CMD` | *(unset)* | watchdog only: run this command per alert, with `BLM_ALERT_SEVERITY` / `BLM_ALERT_TITLE` / `BLM_ALERT_BODY` / `BLM_ALERT_KIND` in the environment |
 
 ### Who can call it
 
@@ -440,6 +459,9 @@ that host has one.
 - **`mcp_server.py`** — MCP (Model Context Protocol) stdio server, stdlib only: exposes `ask`, `generate_image`, `list_models` and `health` as native tools to Claude Code, Claude Desktop, Cursor or Zed. `main()` is the `browser-llm-mcp` console entry point.
 - **`gen_asset.py`** — CLI to generate + post-process a website image asset (needs Pillow); `--ref FILE` restyles an existing asset instead of generating from scratch.
 - **`serve.sh`** / **`install-service.sh`** / **`mode.sh`** / **`browser-llm-api.service.template`** — run the server and manage it as a background `systemd --user` service (generated for this clone).
+- **`ensure-venv.sh`** — guarantees `./venv` exists and can import the dependencies, rebuilding it if not. Every entry point calls it, so a lost venv is a self-repair rather than an outage. `./ensure-venv.sh check` is the read-only probe.
+- **`mcp.sh`** — MCP stdio entry point (ensure the venv, then exec `mcp_server.py`). Point your MCP client at this rather than at `venv/bin/python`, so a rebuilt venv never breaks the handshake.
+- **`healthcheck.sh`** / **`browser-llm-health.service.template`** / **`browser-llm-health.timer`** — the watchdog and its timer. See [Watchdog](#watchdog).
 - **`gemini_bot.py`** — standalone single-prompt Gemini prototype.
 - **`AGENT_IMAGE_GUIDE.md`** — instructions to hand an AI coding agent so it uses this API to generate site image assets.
 

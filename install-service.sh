@@ -9,16 +9,10 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 cd "$DIR"
 
-# 1) venv + dependencies
-if [ ! -x venv/bin/python ]; then
-  echo "[install] creating venv…"
-  python3 -m venv venv
-fi
-echo "[install] installing dependencies…"
-# `python -m pip` (not venv/bin/pip): the pip script's shebang hardcodes the venv
-# path at creation time and breaks if the clone is later moved/renamed.
-./venv/bin/python -m pip install -q --upgrade pip
-./venv/bin/python -m pip install -q -r requirements.txt
+# 1) venv + dependencies. ensure-venv.sh owns this so the installer, serve.sh,
+# mcp.sh and the watchdog all build the venv the same way.
+echo "[install] checking the venv…"
+./ensure-venv.sh
 
 # 2) generate the systemd --user unit for THIS machine/clone
 mkdir -p ~/.config/systemd/user
@@ -26,9 +20,16 @@ UNIT="$HOME/.config/systemd/user/browser-llm-api.service"
 sed "s#__INSTALL_DIR__#$DIR#g" browser-llm-api.service.template > "$UNIT"
 echo "[install] wrote $UNIT (WorkingDirectory=$DIR)"
 
-# 3) enable + start, and keep it running after logout
+# 3) the watchdog. Without it a broken venv is invisible until the next restart
+# — which once meant ten days of a doomed service and then a silent crash loop.
+sed "s#__INSTALL_DIR__#$DIR#g" browser-llm-health.service.template \
+  > "$HOME/.config/systemd/user/browser-llm-health.service"
+cp browser-llm-health.timer "$HOME/.config/systemd/user/browser-llm-health.timer"
+
+# 4) enable + start, and keep it running after logout
 systemctl --user daemon-reload
 systemctl --user enable --now browser-llm-api.service
+systemctl --user enable --now browser-llm-health.timer
 loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true
 
 echo
@@ -38,3 +39,4 @@ echo
 echo "  logs:    journalctl --user -u browser-llm-api -f"
 echo "  restart: systemctl --user restart browser-llm-api"
 echo "  re-auth: DISPLAY=:1 ./venv/bin/python login.py gemini   # or: chatgpt"
+echo "  health:  ./healthcheck.sh --deep   (timer runs it every 10 min)"
