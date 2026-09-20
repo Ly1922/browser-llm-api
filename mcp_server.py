@@ -153,6 +153,12 @@ TOOLS = [
                 },
                 "quality": {"type": "integer"},
                 "timeout": {"type": "integer"},
+                "keep_chat": {
+                    "type": "boolean",
+                    "description": "Leave the image-generation conversation in the "
+                                   "account's history. By default it is deleted after "
+                                   "the generated image has been saved.",
+                },
             },
             "required": ["prompt", "out"],
         },
@@ -219,6 +225,11 @@ def tool_generate_image(args):
         favicon=bool(args.get("favicon")),
         knockout=bool(args.get("knockout_bg")),
         quality=int(args.get("quality") or 88),
+        # The output asset is kept on disk; only the provider-side chat is removed.
+        ephemeral=not args.get("keep_chat"),
+        # Some MCP hosts do not continuously drain server stderr. Avoid blocking
+        # a long-running worker on progress messages before its HTTP request.
+        quiet=True,
     )
     return f"wrote {path}"
 

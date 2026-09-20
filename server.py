@@ -240,7 +240,11 @@ def _resolve_local_attachment(spec: str, *, allow_local_paths: bool) -> Path:
     raw = spec.strip()
     if raw[:7].lower() == "file://":
         from urllib.parse import unquote, urlparse
-        raw = unquote(urlparse(raw).path)
+        from urllib.request import url2pathname
+        parsed = urlparse(raw)
+        raw = url2pathname(unquote(parsed.path))
+        if parsed.netloc:
+            raw = f"//{parsed.netloc}{raw}"
     p = Path(raw).expanduser()
     if not p.is_file():
         raise HTTPException(status_code=400, detail=f"attachment file not found: {spec}")
@@ -395,6 +399,9 @@ class ImageGenRequest(BaseModel):
     # ChatCompletionRequest.images. `image` matches OpenAI's edits field name.
     image: Optional[Union[str, list[str]]] = None
     images: Optional[list[str]] = None
+    # Not OpenAI: remove the provider-side conversation after the image has
+    # been saved. Defaults off for API compatibility; agent-facing tools opt in.
+    ephemeral: Optional[bool] = False
 
 # ---------------------------------------------------------------------------
 # Browser state — one persistent instance per provider, one request at a time
@@ -538,9 +545,16 @@ def _is_dead_transport(exc: BaseException) -> bool:
     rest of the day)."""
     if isinstance(exc, (websockets.exceptions.ConnectionClosed, ConnectionError, OSError)):
         return True
-    # nodriver's Connection.send raises RuntimeError("WebSocket is not connected")
-    # once the socket is gone — same corpse, different wrapper.
-    if isinstance(exc, RuntimeError) and "websocket" in str(exc).lower():
+    # nodriver may report a dead browser as a disconnected WebSocket or as a
+    # stale CDP target/session after Chrome replaced or closed the tab. Both
+    # leave the cached Browser unusable for every subsequent request.
+    message = str(exc).lower()
+    if any(marker in message for marker in (
+        "websocket is not connected",
+        "no target with given id found",
+        "session with given id not found",
+        "target closed",
+    )):
         return True
     return False
 
@@ -1726,7 +1740,8 @@ def _image_payload(imgs: list[dict], response_format: Optional[str]) -> dict:
 
 async def _run_image_request(provider, prompt: str, specs: list, raw: Optional[list],
                              response_format: Optional[str], *, allow_local_paths: bool,
-                             what: str = "image generation"):
+                             what: str = "image generation",
+                             ephemeral: bool = False):
     """Shared body of /v1/images/generations and /v1/images/edits."""
     if not provider.supports_images:
         raise HTTPException(status_code=501,
@@ -1739,7 +1754,8 @@ async def _run_image_request(provider, prompt: str, specs: list, raw: Optional[l
         started = time.monotonic()
         try:
             _text, imgs = await drive_once(provider, prompt, specs, raw_uploads=raw,
-                                           allow_local_paths=allow_local_paths)
+                                           allow_local_paths=allow_local_paths,
+                                           ephemeral=ephemeral)
         except HTTPException:
             _record_request(provider.name, started, RuntimeError("bad request"))
             raise
@@ -1772,7 +1788,8 @@ async def images_generations(req: ImageGenRequest, request: Request):
 
     return await _run_image_request(get_provider(req.model), req.prompt, _ref_specs(req),
                                     None, req.response_format,
-                                    allow_local_paths=allow_paths)
+                                    allow_local_paths=allow_paths,
+                                    ephemeral=bool(req.ephemeral))
 
 
 @app.post("/v1/images/edits")
@@ -1798,6 +1815,9 @@ async def images_edits(request: Request):
         prompt = str(form.get("prompt") or "").strip()
         model = str(form.get("model") or DEFAULT_PROVIDER)
         response_format = str(form.get("response_format") or "b64_json")
+        ephemeral = str(form.get("ephemeral") or "").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
         for field in ("image", "image[]", "images", "images[]"):
             for item in form.getlist(field):
                 if hasattr(item, "read"):  # UploadFile
@@ -1817,6 +1837,7 @@ async def images_edits(request: Request):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"invalid request: {e}")
         prompt, model, response_format = req.prompt, req.model, req.response_format
+        ephemeral = bool(req.ephemeral)
         specs = _ref_specs(req)
 
     if not prompt.strip():
@@ -1833,12 +1854,14 @@ async def images_edits(request: Request):
                 f"data:{_MIME_BY_EXT.get(_sniff_ext(data) or 'png', 'image/png')};base64,"
                 f"{base64.b64encode(data).decode()}" for _fname, data in raw]
         proxied = ImageGenRequest(prompt=prompt, model=name, images=specs,
-                                  response_format=response_format)
+                                  response_format=response_format,
+                                  ephemeral=ephemeral)
         return await _proxy_images(name, REMOTES[name], proxied,
                                    path="/v1/images/edits", allow_local_paths=allow_paths)
 
     return await _run_image_request(get_provider(model), prompt, specs, raw, response_format,
-                                    allow_local_paths=allow_paths, what="image edit")
+                                    allow_local_paths=allow_paths, what="image edit",
+                                    ephemeral=ephemeral)
 
 
 # ---------------------------------------------------------------------------

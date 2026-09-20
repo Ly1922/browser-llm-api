@@ -177,3 +177,31 @@ class AskEphemeralTest(unittest.TestCase):
     def test_keep_chat_is_advertised(self):
         ask = next(t for t in mcp_server.TOOLS if t["name"] == "ask")
         self.assertIn("keep_chat", ask["inputSchema"]["properties"])
+
+
+class GenerateImageEphemeralTest(unittest.TestCase):
+    """MCP image generation keeps the file but removes its upstream chat by default."""
+
+    def _call(self, args):
+        import gen_asset
+
+        with mock.patch.object(gen_asset, "render", return_value="C:/out.png") as render:
+            result = mcp_server.tool_generate_image({
+                "prompt": "draw it",
+                "out": "C:/out.png",
+                **args,
+            })
+        self.assertEqual(result, "wrote C:/out.png")
+        return render.call_args.kwargs
+
+    def test_default_is_ephemeral(self):
+        kwargs = self._call({})
+        self.assertTrue(kwargs["ephemeral"])
+        self.assertTrue(kwargs["quiet"])
+
+    def test_keep_chat_opts_out(self):
+        self.assertFalse(self._call({"keep_chat": True})["ephemeral"])
+
+    def test_keep_chat_is_advertised(self):
+        tool = next(t for t in mcp_server.TOOLS if t["name"] == "generate_image")
+        self.assertIn("keep_chat", tool["inputSchema"]["properties"])

@@ -5,6 +5,9 @@ chatgpt_profile/
 # Logs
 *.log
 
+# Locally generated image assets and prompt results
+generated-images/
+
 # Research data
 gemini_research_data.txt
 

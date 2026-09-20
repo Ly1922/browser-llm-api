@@ -345,11 +345,12 @@ curl -s localhost:8081/v1/chat/completions -H 'Content-Type: application/json' -
 It is the same soft delete the sidebar's own "Delete" performs, on the conversation
 that request created and no other. Deletion failing never fails the request: the
 answer is already in hand, and the server logs the reason. ChatGPT implements it;
-providers that keep no reachable history ignore the flag. Image generation is not
-covered: an asset you keep usually comes with a thread you want to go back to.
+providers that keep no reachable history ignore the flag. Image requests accept the
+same flag; the generated asset is saved before its provider-side conversation is removed.
 
-The MCP `ask` tool sets it by default, since an agent's question is tooling rather
-than conversation; pass `keep_chat: true` when the person asked to see the thread.
+The MCP `ask` and `generate_image` tools set it by default, since an agent's request is
+tooling rather than conversation; pass `keep_chat: true` when the person asked to see
+the thread. For image generation, this keeps the output file either way.
 
 ## Configuration
 
@@ -438,7 +439,7 @@ Or, in a client that reads a JSON config (Claude Desktop, Cursor, Zed):
 | tool | does |
 |------|------|
 | `ask` | prompt (+ `images`, `system`, `model`) → the reply. `out` writes it to a file and returns the path, which keeps a large HTML answer out of the agent's context; `strip_fences` drops ``` lines. The conversation is deleted afterwards unless `keep_chat` is set. |
-| `generate_image` | prompt (+ `refs` for image-to-image) → a written asset, with the same resize/crop/favicon/knockout shaping as `gen_asset.py`. |
+| `generate_image` | prompt (+ `refs` for image-to-image) → a written asset, with the same resize/crop/favicon/knockout shaping as `gen_asset.py`. The provider-side conversation is deleted afterwards unless `keep_chat` is set; the written image remains. |
 | `list_models` | the provider ids this server can drive. |
 | `health` | reachable? which providers are logged in? a request in flight? |
 

@@ -110,12 +110,15 @@ def main():
     ap.add_argument("--strip-fences", action="store_true",
                     help="drop ``` code-fence lines (handy with --out for code/HTML)")
     ap.add_argument("--timeout", type=int, default=440)
+    ap.add_argument("--ephemeral", action="store_true",
+                    help="delete the provider-side conversation after the reply")
     a = ap.parse_args()
 
     live = a.stream and not a.out
     emit = (lambda d: (sys.stdout.write(d), sys.stdout.flush())) if live else None
     text = ask(a.prompt, model=a.model, system=a.system,
-               timeout=a.timeout, stream=a.stream, on_delta=emit, images=a.images)
+               timeout=a.timeout, stream=a.stream, on_delta=emit, images=a.images,
+               ephemeral=a.ephemeral)
 
     if a.strip_fences:
         text = "\n".join(ln for ln in text.splitlines()

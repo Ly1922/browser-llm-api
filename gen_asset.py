@@ -71,7 +71,7 @@ def _ref_spec(path_or_url):
         return f"data:{mime};base64," + base64.b64encode(f.read()).decode()
 
 
-def generate(prompt, model=None, timeout=440, refs=None):
+def generate(prompt, model=None, timeout=440, refs=None, ephemeral=False):
     payload = {"prompt": prompt}
     if model:
         payload["model"] = model  # else the server uses its DEFAULT_PROVIDER
@@ -80,6 +80,8 @@ def generate(prompt, model=None, timeout=440, refs=None):
         # Reference image(s) → image-to-image via the edits endpoint.
         payload["images"] = [_ref_spec(r) for r in refs]
         url = EDIT_API
+    if ephemeral:
+        payload["ephemeral"] = True
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -165,15 +167,17 @@ def knockout_bg(img, tol=28):
 
 def render(prompt, out, model=None, refs=None, timeout=440, width=None, height=None,
            square_size=None, fit="cover", fmt=None, favicon=False, knockout=False,
-           quality=88):
+           quality=88, ephemeral=False, quiet=False):
     """Generate → shape → write, and return the output path.
 
     The whole wrapper as one call, so callers other than the CLI (the MCP server)
     don't have to reimplement the shaping order: crop/resize first, knockout
     after, format last."""
     what = f"editing {len(refs)} ref(s)" if refs else "generating"
-    print(f"[gen_asset] {what} ({model or 'default'}): {prompt[:70]}…", file=sys.stderr)
-    img = generate(prompt, model=model, timeout=timeout, refs=refs)
+    if not quiet:
+        print(f"[gen_asset] {what} ({model or 'default'}): {prompt[:70]}…", file=sys.stderr)
+    img = generate(prompt, model=model, timeout=timeout, refs=refs,
+                   ephemeral=ephemeral)
 
     if square_size:
         img = square(img, square_size)
@@ -198,7 +202,8 @@ def render(prompt, out, model=None, refs=None, timeout=440, width=None, height=N
     else:  # png and anything else
         img.save(out)
 
-    print(f"[gen_asset] wrote {out}  ({img.size[0]}x{img.size[1]}, {fmt})", file=sys.stderr)
+    if not quiet:
+        print(f"[gen_asset] wrote {out}  ({img.size[0]}x{img.size[1]}, {fmt})", file=sys.stderr)
     return out
 
 
@@ -223,6 +228,8 @@ def main():
     ap.add_argument("--knockout-bg", action="store_true", dest="knockout",
                     help="make a flat background transparent (png/webp/ico only)")
     ap.add_argument("--quality", type=int, default=88)
+    ap.add_argument("--ephemeral", action="store_true",
+                    help="delete the provider-side conversation after saving the image")
     args = ap.parse_args()
 
     out = render(
@@ -230,6 +237,7 @@ def main():
         timeout=args.timeout, width=args.width, height=args.height,
         square_size=args.square, fit=args.fit, fmt=args.format,
         favicon=args.favicon, knockout=args.knockout, quality=args.quality,
+        ephemeral=args.ephemeral,
     )
     print(out)
 
